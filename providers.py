@@ -101,7 +101,8 @@ def persona(filename: str, data: bytes, first_name: str = "Test", last_name: str
         "provider": "persona",
         "status": inquiry["attributes"].get("status", "created"),
         "inquiry_id": inquiry["id"],
-        "note": "Sandbox inquiry — documents go through its hosted flow (step 2), not this upload.",
+        "hosted_flow_url": f"https://inquiry.withpersona.com/verify?inquiry-id={inquiry['id']}",
+        "note": "Sandbox inquiry — documents and selfie go through its hosted flow at hosted_flow_url.",
     }
 
 
@@ -180,17 +181,17 @@ def persona_start_verification(first_name: str = "Test", last_name: str = "Sandb
         )
         r.raise_for_status()
         inquiry = r.json()["data"]
+    # Persona's create-inquiry response carries no URL; the hosted flow is the classic
+    # /verify page keyed by inquiry id (verified live against the sandbox).
+    hosted_url = f"https://inquiry.withpersona.com/verify?inquiry-id={inquiry['id']}"
     attrs = inquiry["attributes"]
-    # Persona has renamed this field across API versions; accept whichever the sandbox returns.
-    hosted_url = attrs.get("session-token-url") or attrs.get("hosted-url") or attrs.get("url")
     return {
         "provider": "persona",
         "flow": "hosted",
         "inquiry_id": inquiry["id"],
         "status": attrs.get("status", "created"),
         "hosted_flow_url": hosted_url,
-        "note": "Open hosted_flow_url to run the sandbox selfie/liveness capture; field name "
-                "verified against docs.withpersona.com at build time — re-check if this comes back null.",
+        "note": "Open hosted_flow_url to run the sandbox selfie/liveness capture.",
     }
 
 

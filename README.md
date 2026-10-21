@@ -44,9 +44,8 @@ Uploads are capped at 15 MB.
   Web SDK is mounted). The UI shows the `sdk_token` to feed Onfido's Web SDK — that is what runs
   the sandbox selfie/liveness capture.
 - **Persona**: creates a sandbox Inquiry from `PERSONA_TEMPLATE_ID` and returns its hosted-flow
-  URL (Persona has renamed this response field across API versions — the harness tries
-  `session-token-url`, `hosted-url`, then `url`; re-check docs.withpersona.com if it comes back
-  null).
+  URL (`https://inquiry.withpersona.com/verify?inquiry-id=…`) — the create-inquiry response
+  itself carries no URL, the harness builds the canonical one.
 - **Veriff**: creates a test-integration session (HMAC-SHA256 signed) and returns
   `verification.url`, the hosted flow, plus the session id. Test integrations never auto-decide —
   force the result in the Veriff Customer Portal.
