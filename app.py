@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -24,7 +25,15 @@ try:  # package run (repo root): uvicorn kyc_harness.app:app
 except ImportError:  # standalone repo (Dokploy): uvicorn app:app
     from providers import HOSTED_FLOW, PROVIDERS
 
-app = FastAPI(title="KYC sandbox harness", docs_url="/docs", redoc_url=None)
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+MAX_WEBHOOK_BYTES = 256 * 1024
+MAX_EVENTS = 50
+PROVIDER_SLUG = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+_auth_configured = bool(os.environ.get("HARNESS_USER") and os.environ.get("HARNESS_PASS"))
+# Swagger UI is only an attack surface when auth could have protected it; with no auth
+# configured everything is open anyway, so keep /docs for convenience in that mode.
+app = FastAPI(title="KYC sandbox harness", docs_url=None if _auth_configured else "/docs", redoc_url=None)
 security = HTTPBasic(auto_error=False)
 EVENTS: list[dict] = []
 STATIC = Path(__file__).parent / "static"
@@ -39,6 +48,11 @@ def auth(creds: HTTPBasicCredentials | None = Depends(security)) -> None:
         secrets.compare_digest(creds.username, user) and secrets.compare_digest(creds.password, password)
     ):
         raise HTTPException(401, "auth required", headers={"WWW-Authenticate": "Basic"})
+
+
+def log_event(event: dict) -> None:
+    EVENTS.append(event)
+    del EVENTS[:-MAX_EVENTS]  # in-memory ring: keep only the most recent events
 
 
 @app.get("/health")
@@ -72,18 +86,18 @@ async def verify(
     data = await file.read()
     if not data:
         raise HTTPException(400, "empty upload")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"upload larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     back_filename = file_back.filename if file_back is not None else None
     back_data = await file_back.read() if file_back is not None and back_filename else None
+    if back_data and len(back_data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"upload larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     try:
-        result = fn(file.filename or "upload.jpg", data)
-        if back_data:
-            result["files"] = {**result.get("files", {}), "uploaded_back": back_filename}
-        if first_name or last_name or date_of_birth:
-            result["submitted_fields"] = {"first_name": first_name, "last_name": last_name,
-                                           "date_of_birth": date_of_birth or None}
+        result = fn(file.filename or "upload.jpg", data, first_name=first_name, last_name=last_name,
+                    back=(back_filename, back_data) if back_data else None)
     except Exception as exc:  # noqa: BLE001 — surface the config/API error to the tester
         result = {"provider": provider, "status": "error", "error": str(exc)}
-    EVENTS.append({"at": time.time(), "provider": provider, "step": "document_upload", "result": result})
+    log_event({"at": time.time(), "provider": provider, "step": "document_upload", "result": result})
     return JSONResponse(result)
 
 
@@ -106,22 +120,30 @@ async def start_verification(
         result = fn(**kwargs)
     except Exception as exc:  # noqa: BLE001 — surface the config/API error to the tester
         result = {"provider": provider, "flow": "hosted", "status": "error", "error": str(exc)}
-    EVENTS.append({"at": time.time(), "provider": provider, "step": "hosted_flow", "result": result})
+    log_event({"at": time.time(), "provider": provider, "step": "hosted_flow", "result": result})
     return JSONResponse(result)
 
 
 @app.post("/webhook/{provider}")
 async def webhook(provider: str, request: Request) -> dict:
-    """Tiny webhook sink: stores whatever the sandbox posts so the UI can show decisions."""
+    """Tiny webhook sink: stores whatever the sandbox posts so the UI can show decisions.
+
+    Open by design (vendor servers cannot answer our basic auth); the provider segment is
+    validated and payloads size-capped so this stays a boring sink, not an injection point.
+    """
+    if not PROVIDER_SLUG.fullmatch(provider):
+        raise HTTPException(400, "invalid provider segment")
     raw = await request.body()
+    if len(raw) > MAX_WEBHOOK_BYTES:
+        raw = raw[:MAX_WEBHOOK_BYTES]
     try:
         payload = json.loads(raw or b"{}")
     except json.JSONDecodeError:
         payload = {"raw_b64": base64.b64encode(raw).decode()[:2000]}
-    EVENTS.append({"at": time.time(), "provider": provider, "webhook": payload})
+    log_event({"at": time.time(), "provider": provider, "webhook": payload})
     return {"received": True}
 
 
 @app.get("/api/events")
 def events(_: None = Depends(auth)) -> dict:
-    return {"events": EVENTS[-50:]}
+    return {"events": EVENTS[-MAX_EVENTS:]}

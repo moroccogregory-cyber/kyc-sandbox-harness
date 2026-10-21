@@ -22,7 +22,8 @@ import httpx
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
-def _mock(filename: str, size: int | bytes) -> dict[str, Any]:
+def _mock(filename: str, size: int | bytes, first_name: str = "Test", last_name: str = "Sandbox",
+          back: tuple[str, bytes] | None = None) -> dict[str, Any]:
     return {
         "provider": "mock",
         "status": "passed",
@@ -30,29 +31,40 @@ def _mock(filename: str, size: int | bytes) -> dict[str, Any]:
         "fields": {"document_type": "NL passport", "side": "front",
                    "bytes": len(size) if isinstance(size, (bytes, bytearray)) else size},
         "checks": {"authenticity": "simulated", "data_comparison": "simulated", "image_quality": "simulated"},
-        "files": {"uploaded": filename},
+        "files": {"uploaded": filename, **({"uploaded_back": back[0]} if back else {})},
+        "submitted_fields": {"first_name": first_name, "last_name": last_name},
     }
 
 
-def onfido(filename: str, data: bytes) -> dict[str, Any]:
-    """Create applicant -> upload document -> request a document check (sandbox token)."""
+def onfido(filename: str, data: bytes, first_name: str = "Test", last_name: str = "Sandbox",
+           back: tuple[str, bytes] | None = None) -> dict[str, Any]:
+    """Create applicant -> upload document(s) -> request a document check (sandbox token)."""
     token = os.environ.get("ONFIDO_API_TOKEN", "")
     if not token.startswith("api_sandbox"):
         raise RuntimeError("ONFIDO_API_TOKEN must be a sandbox token (api_sandbox…)")
     region = os.environ.get("ONFIDO_REGION", "eu")
     base = f"https://api.{region}.onfido.com/v3.6"
     headers = {"Authorization": f"Token token={token}"}
+    document_ids: list[str] = []
     with httpx.Client(timeout=TIMEOUT, headers=headers) as c:
-        r = c.post(f"{base}/applicants", json={"first_name": "Test", "last_name": "Sandbox"})
+        r = c.post(f"{base}/applicants", json={"first_name": first_name, "last_name": last_name})
         r.raise_for_status()
         applicant_id = r.json()["id"]
         r = c.post(
             f"{base}/documents",
-            data={"applicant_id": applicant_id, "type": "passport"},
+            data={"applicant_id": applicant_id, "type": "passport", "side": "front"},
             files={"file": (filename, data, "image/jpeg")},
         )
         r.raise_for_status()
-        document_id = r.json()["id"]
+        document_ids.append(r.json()["id"])
+        if back:
+            r = c.post(
+                f"{base}/documents",
+                data={"applicant_id": applicant_id, "type": "passport", "side": "back"},
+                files={"file": (back[0], back[1], "image/jpeg")},
+            )
+            r.raise_for_status()
+            document_ids.append(r.json()["id"])
         r = c.post(f"{base}/checks", json={"applicant_id": applicant_id, "report_names": ["document"]})
         r.raise_for_status()
         check = r.json()
@@ -60,14 +72,16 @@ def onfido(filename: str, data: bytes) -> dict[str, Any]:
         "provider": "onfido",
         "status": check.get("status", "in_progress"),
         "applicant_id": applicant_id,
-        "document_id": document_id,
+        "document_ids": document_ids,
         "check": check,
         "note": "Sandbox requests return templated responses; no real analysis runs.",
     }
 
 
-def persona(filename: str, data: bytes) -> dict[str, Any]:
+def persona(filename: str, data: bytes, first_name: str = "Test", last_name: str = "Sandbox",
+            back: tuple[str, bytes] | None = None) -> dict[str, Any]:
     """Create a sandbox Inquiry (Persona's document submission normally runs in its hosted flow)."""
+    del filename, data, back  # Persona takes documents inside its hosted flow, not via upload
     key = os.environ.get("PERSONA_API_KEY", "")
     if not key:
         raise RuntimeError("PERSONA_API_KEY is not set")
@@ -78,7 +92,8 @@ def persona(filename: str, data: bytes) -> dict[str, Any]:
     with httpx.Client(timeout=TIMEOUT, headers=headers) as c:
         r = c.post(
             "https://api.withpersona.com/api/v1/inquiries",
-            json={"data": {"attributes": {"inquiry-template-id": template}}},
+            json={"data": {"attributes": {"inquiry-template-id": template,
+                                          "fields": {"name-first": first_name, "name-last": last_name}}}},
         )
         r.raise_for_status()
         inquiry = r.json()["data"]
@@ -86,43 +101,37 @@ def persona(filename: str, data: bytes) -> dict[str, Any]:
         "provider": "persona",
         "status": inquiry["attributes"].get("status", "created"),
         "inquiry_id": inquiry["id"],
-        "note": "Sandbox inquiry — open its hosted-flow URL to submit a test document; sandbox does not verify.",
+        "note": "Sandbox inquiry — documents go through its hosted flow (step 2), not this upload.",
     }
 
 
-def veriff(filename: str, data: bytes) -> dict[str, Any]:
-    """Create a Veriff test-integration session and upload one document image."""
+def veriff(filename: str, data: bytes, first_name: str = "Test", last_name: str = "Sandbox",
+           back: tuple[str, bytes] | None = None) -> dict[str, Any]:
+    """Create a Veriff test-integration session for the hosted flow."""
+    del filename, data, back  # Veriff takes document images inside its hosted flow
     api_key = os.environ.get("VERIFF_API_KEY", "")
     shared = os.environ.get("VERIFF_SHARED_SECRET", "")
     if not api_key or not shared:
         raise RuntimeError("VERIFF_API_KEY / VERIFF_SHARED_SECRET are not set")
     base = os.environ.get("VERIFF_STATION_URL", "https://stationapi.veriff.com/v1")
     session_payload = {"verification": {"callback": os.environ.get("VERIFF_CALLBACK", ""),
-                                        "person": {"firstName": "Test", "lastName": "Sandbox"},
+                                        "person": {"firstName": first_name, "lastName": last_name},
                                         "document": {"type": "PASSPORT", "country": "NL"}}}
     body = json.dumps(session_payload)
-
-    def sign(payload: str) -> str:
-        return hmac.new(shared.encode(), payload.encode(), hashlib.sha256).hexdigest()
-
+    signature = hmac.new(shared.encode(), body.encode(), hashlib.sha256).hexdigest()
     with httpx.Client(timeout=TIMEOUT) as c:
         r = c.post(f"{base}/sessions", content=body,
                    headers={"Content-Type": "application/json", "X-AUTH-CLIENT": api_key,
-                            "X-SIGNATURE": sign(body)})
+                            "X-SIGNATURE": signature})
         r.raise_for_status()
-        session = r.json()
-        session_id = session["verification"]["id"]
-        media_body = json.dumps({"images": []})
-        r = c.post(f"{base}/sessions/{session_id}/media", content=media_body,
-                   headers={"Content-Type": "application/json", "X-AUTH-CLIENT": api_key,
-                            "X-SIGNATURE": sign(media_body)})
-        media_status = r.status_code
+        session_id = r.json()["verification"]["id"]
     return {
         "provider": "veriff",
         "status": "created",
         "session_id": session_id,
-        "media_upload_http": media_status,
-        "note": "Test integrations get no decision — force the status in the Veriff Customer Portal.",
+        "note": "Session created; the uploaded image is NOT sent to Veriff — document + selfie go "
+                "through the hosted flow (step 2). Test integrations get no decision — force it "
+                "in the Veriff Customer Portal.",
     }
 
 

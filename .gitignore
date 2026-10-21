@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .env
 .venv/
+HANDOFF_PROMPT.md
+.DS_Store

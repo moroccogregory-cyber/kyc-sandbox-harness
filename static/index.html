@@ -103,12 +103,25 @@ document.getElementById('hf').addEventListener('submit', async (e) => {
   const res = await fetch('/api/start_verification', { method: 'POST', body });
   const data = await res.json();
   hfOut.textContent = JSON.stringify(data, null, 2);
+  hostedResult.innerHTML = '';
   const url = data.hosted_flow_url;
   const token = data.sdk_token;
   if (url) {
-    hostedResult.innerHTML = '<a class="hosted-link" target="_blank" href="' + url + '">Open hosted flow (selfie/liveness) →</a>';
+    const a = document.createElement('a');
+    a.className = 'hosted-link';
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.href = url;
+    a.textContent = 'Open hosted flow (selfie/liveness) →';
+    hostedResult.appendChild(a);
   } else if (token) {
-    hostedResult.innerHTML = '<div class="note">Onfido SDK token (mount the Web SDK with this to run selfie/liveness):</div><code style="word-break:break-all;">' + token + '</code>';
+    const note = document.createElement('div');
+    note.className = 'note';
+    note.textContent = 'Onfido SDK token (mount the Web SDK with this to run selfie/liveness):';
+    const code = document.createElement('code');
+    code.style.wordBreak = 'break-all';
+    code.textContent = token;
+    hostedResult.append(note, code);
   }
   loadEvents();
 });
@@ -120,12 +133,21 @@ async function loadEvents() {
   for (const ev of d.events.slice().reverse()) {
     const div = document.createElement('div');
     div.className = 'event';
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = ev.step || 'webhook';
+    const who = document.createElement('b');
+    who.textContent = ev.provider;   // provider comes from the webhook URL path — never trusted as HTML
     const when = new Date(ev.at * 1000).toLocaleTimeString();
     const status = (ev.result && (ev.result.status || ev.result.flow)) || (ev.webhook ? 'webhook' : '');
+    div.append(badge, who, document.createTextNode(' · ' + when + (status ? ' · ' + status : '')));
     const fields = ev.result && ev.result.fields ? JSON.stringify(ev.result.fields) : '';
-    div.innerHTML = '<span class="badge">' + (ev.step || 'webhook') + '</span>' +
-      '<b>' + ev.provider + '</b> · ' + when + (status ? ' · ' + status : '') +
-      (fields ? '<div class="note">' + fields + '</div>' : '');
+    if (fields) {
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.textContent = fields;
+      div.appendChild(note);
+    }
     el.appendChild(div);
   }
 }

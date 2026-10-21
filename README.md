@@ -23,8 +23,17 @@ Without keys only **mock** works; the other providers report exactly which env v
 ## Step 1 — Document upload
 
 `POST /api/verify` — `provider`, `file` (front), optional `file_back`, optional `first_name` /
-`last_name` / `date_of_birth`. Passed through to the vendor where it supports it (Onfido/Veriff
-applicant name; Persona inquiry fields).
+`last_name` / `date_of_birth`. What each vendor does with them:
+
+- **Onfido**: name goes on the applicant; front image uploaded as `side=front`, the back image
+  (if given) as `side=back`.
+- **Persona**: name goes into the inquiry's fields; documents are NOT uploaded here — Persona
+  takes them inside its hosted flow (step 2).
+- **Veriff**: name goes on the session's person. The uploaded image is NOT sent to Veriff —
+  document + selfie go through the hosted flow (step 2).
+- **mock**: simulates; echoes the fields and filenames back.
+
+Uploads are capped at 15 MB.
 
 ## Step 2 — Hosted flow (selfie/liveness)
 
@@ -45,21 +54,20 @@ applicant name; Persona inquiry fields).
   flow can be exercised end to end without any vendor keys.
 
 Every call — document upload, hosted-flow start, and incoming webhooks at `/webhook/{provider}` —
-is appended to an in-memory event log; `GET /api/events` returns the last 50, and the page lists
-them live under "Latest events".
+is appended to an in-memory ring of the last 50 events; `GET /api/events` returns them, and the
+page lists them live under "Latest events".
 
 ## Deploy on Dokploy (your server)
 
-1. Push this folder (or the repo) to a private GitHub repo under moroccogregory-cyber.
-2. Dokploy → Create Application → Git → pick the repo, build path = repo root (Dockerfile at
-   repo root must be `kyc_harness/Dockerfile`, so either set Dockerfile path to
-   `kyc_harness/Dockerfile` or push `kyc_harness/` as its own repo).
+1. Push this repo to GitHub under moroccogregory-cyber.
+2. Dokploy → Create Application → Git → pick the repo; the Dockerfile sits at the repo root, so
+   build path = repo root and Dockerfile path = `Dockerfile`.
 3. Environment: paste the variables from `.env.example` (sandbox keys only!). Set
    `HARNESS_USER`/`HARNESS_PASS` so the harness isn't open to the internet. Set
    `ONFIDO_REFERRER` to the public domain (wildcard allowed), `PERSONA_TEMPLATE_ID` to a sandbox
    inquiry template, `VERIFF_CALLBACK` to `https://<public-domain>/webhook/veriff`.
 4. Domain: point e.g. `kyc.bestelappje.com` at it, enable HTTPS (Let's Encrypt in Dokploy).
-5. Deploy. Health check path: `/health`.
+5. Deploy. Health check path: `/health` (intentionally unauthenticated, for the platform probe).
 
 ## Security notes
 
@@ -67,5 +75,9 @@ them live under "Latest events".
   starts with `api_sandbox`; Persona/Veriff keys must be the vendor's sandbox/test-integration
   credentials — this harness refuses to proceed on a missing/malformed key rather than silently
   calling a production endpoint.
-- Add basic auth before exposing it publicly.
+- Basic auth protects `/`, the API routes and `/api/events`; `/health` stays open for the Dokploy
+  probe. `/docs` is only enabled when no auth is configured.
+- `/webhook/{provider}` is open by design — vendor servers can't answer our basic auth — but the
+  provider segment is strictly validated and payloads are size-capped; the UI renders every event
+  field as text (no HTML injection from webhook contents).
 - The only persistent state is the last 50 events in memory (resets on restart); no database.

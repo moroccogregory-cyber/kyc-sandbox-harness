@@ -1,0 +1,9 @@
+.venv/
+.git/
+.gitignore
+__pycache__/
+*.pyc
+.env
+.DS_Store
+HANDOFF_PROMPT.md
+README.md
