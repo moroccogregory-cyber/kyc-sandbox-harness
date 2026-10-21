@@ -7,10 +7,15 @@ real documents or identities.
 
 ## Run locally
 
+Both entry points below work, from the repo root or from anywhere (the `kyc_harness/` package is a
+thin shim over the root `app.py`; the Docker image runs `app:app`):
+
     .venv/bin/python -m uvicorn kyc_harness.app:app --host 127.0.0.1 --port 8899
     # or from inside kyc_harness/:
     uvicorn app:app --host 127.0.0.1 --port 8899
     open http://127.0.0.1:8899
+
+Python 3.9 works (requirements pull `eval_type_backport` on <3.10); the image is 3.12.
 
 Without keys only **mock** works; the other providers report exactly which env var is missing
 (as clean JSON, no crash).
