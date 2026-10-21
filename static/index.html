@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KYC sandbox harness</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1c1c1e; }
+  h1 { font-size: 22px; }
+  .card { border: 1px solid #e5e5ea; border-radius: 12px; padding: 20px; }
+  label { display: block; font-size: 13px; color: #6e6e73; margin: 14px 0 4px; }
+  select, input[type=file] { width: 100%; padding: 8px; border: 1px solid #d1d1d6; border-radius: 8px; }
+  button { margin-top: 18px; background: #0a84ff; color: white; border: 0; padding: 10px 18px; border-radius: 9px; font-size: 15px; cursor: pointer; }
+  pre { background: #f2f2f7; padding: 14px; border-radius: 10px; overflow: auto; font-size: 12px; }
+  .note { font-size: 12px; color: #6e6e73; margin-top: 12px; }
+</style>
+</head>
+<body>
+<h1>KYC sandbox harness</h1>
+<div class="card">
+  <p>Upload one test image and see what the selected vendor's <b>sandbox</b> returns. Sandbox modes simulate or force results — no real document analysis happens.</p>
+  <form id="f">
+    <label>Provider</label>
+    <select name="provider" id="provider"></select>
+    <label>Test image</label>
+    <input type="file" name="file" id="file" accept="image/*">
+    <button type="submit">Send to sandbox</button>
+  </form>
+  <div class="note">Use the SPECIMEN mockup or any image. Never upload real identity documents to a sandbox.</div>
+  <pre id="out" hidden></pre>
+</div>
+<script>
+fetch('/api/providers').then(r => r.json()).then(d => {
+  const sel = document.getElementById('provider');
+  for (const p of d.providers) { const o = document.createElement('option'); o.value = o.textContent = p; sel.appendChild(o); }
+});
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const out = document.getElementById('out'); out.hidden = false; out.textContent = 'sending…';
+  const body = new FormData(e.target);
+  const res = await fetch('/api/verify', { method: 'POST', body });
+  out.textContent = JSON.stringify(await res.json(), null, 2);
+});
+</script>
+</body>
+</html>
