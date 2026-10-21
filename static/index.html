@@ -4,42 +4,132 @@
 <meta charset="utf-8">
 <title>KYC sandbox harness</title>
 <style>
-  body { font-family: -apple-system, system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1c1c1e; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; color: #1c1c1e; }
   h1 { font-size: 22px; }
-  .card { border: 1px solid #e5e5ea; border-radius: 12px; padding: 20px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .card { border: 1px solid #e5e5ea; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
   label { display: block; font-size: 13px; color: #6e6e73; margin: 14px 0 4px; }
-  select, input[type=file] { width: 100%; padding: 8px; border: 1px solid #d1d1d6; border-radius: 8px; }
+  select, input[type=file], input[type=text], input[type=date] { width: 100%; padding: 8px; border: 1px solid #d1d1d6; border-radius: 8px; box-sizing: border-box; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
   button { margin-top: 18px; background: #0a84ff; color: white; border: 0; padding: 10px 18px; border-radius: 9px; font-size: 15px; cursor: pointer; }
+  button.secondary { background: #34c759; }
   pre { background: #f2f2f7; padding: 14px; border-radius: 10px; overflow: auto; font-size: 12px; }
   .note { font-size: 12px; color: #6e6e73; margin-top: 12px; }
+  a.hosted-link { display: inline-block; margin-top: 10px; word-break: break-all; }
+  .events { max-height: 360px; overflow: auto; }
+  .event { border-bottom: 1px solid #e5e5ea; padding: 10px 0; font-size: 12px; }
+  .event:last-child { border-bottom: 0; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #e5e5ea; margin-right: 6px; }
 </style>
 </head>
 <body>
 <h1>KYC sandbox harness</h1>
+
 <div class="card">
+  <h2>1. Document upload</h2>
   <p>Upload one test image and see what the selected vendor's <b>sandbox</b> returns. Sandbox modes simulate or force results — no real document analysis happens.</p>
   <form id="f">
     <label>Provider</label>
     <select name="provider" id="provider"></select>
-    <label>Test image</label>
+    <div class="row">
+      <div>
+        <label>First name</label>
+        <input type="text" name="first_name" id="first_name" value="Test">
+      </div>
+      <div>
+        <label>Last name</label>
+        <input type="text" name="last_name" id="last_name" value="Sandbox">
+      </div>
+    </div>
+    <label>Date of birth</label>
+    <input type="date" name="date_of_birth" id="date_of_birth">
+    <label>Document — front</label>
     <input type="file" name="file" id="file" accept="image/*">
+    <label>Document — back (optional)</label>
+    <input type="file" name="file_back" id="file_back" accept="image/*">
     <button type="submit">Send to sandbox</button>
   </form>
   <div class="note">Use the SPECIMEN mockup or any image. Never upload real identity documents to a sandbox.</div>
   <pre id="out" hidden></pre>
 </div>
+
+<div class="card">
+  <h2>2. Hosted flow (selfie/liveness)</h2>
+  <p>Opens the vendor's own hosted flow — this is where the sandbox selfie/liveness capture happens; it cannot be a plain upload.</p>
+  <form id="hf">
+    <label>Provider</label>
+    <select name="provider" id="hf_provider"></select>
+    <button type="submit" class="secondary">Start verification</button>
+  </form>
+  <div id="hosted_result"></div>
+  <pre id="hf_out" hidden></pre>
+</div>
+
+<div class="card">
+  <h2>Latest events</h2>
+  <div class="events" id="events"></div>
+</div>
+
 <script>
-fetch('/api/providers').then(r => r.json()).then(d => {
-  const sel = document.getElementById('provider');
-  for (const p of d.providers) { const o = document.createElement('option'); o.value = o.textContent = p; sel.appendChild(o); }
-});
+async function loadProviders() {
+  const d = await (await fetch('/api/providers')).json();
+  for (const selId of ['provider', 'hf_provider']) {
+    const sel = document.getElementById(selId);
+    sel.innerHTML = '';
+    for (const p of d.providers) { const o = document.createElement('option'); o.value = o.textContent = p; sel.appendChild(o); }
+  }
+}
+loadProviders();
+
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const out = document.getElementById('out'); out.hidden = false; out.textContent = 'sending…';
   const body = new FormData(e.target);
   const res = await fetch('/api/verify', { method: 'POST', body });
   out.textContent = JSON.stringify(await res.json(), null, 2);
+  loadEvents();
 });
+
+document.getElementById('hf').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const hfOut = document.getElementById('hf_out'); hfOut.hidden = false; hfOut.textContent = 'starting…';
+  const hostedResult = document.getElementById('hosted_result'); hostedResult.innerHTML = '';
+  const body = new FormData();
+  body.set('provider', document.getElementById('hf_provider').value);
+  body.set('first_name', document.getElementById('first_name').value || 'Test');
+  body.set('last_name', document.getElementById('last_name').value || 'Sandbox');
+  body.set('date_of_birth', document.getElementById('date_of_birth').value || '');
+  const res = await fetch('/api/start_verification', { method: 'POST', body });
+  const data = await res.json();
+  hfOut.textContent = JSON.stringify(data, null, 2);
+  const url = data.hosted_flow_url;
+  const token = data.sdk_token;
+  if (url) {
+    hostedResult.innerHTML = '<a class="hosted-link" target="_blank" href="' + url + '">Open hosted flow (selfie/liveness) →</a>';
+  } else if (token) {
+    hostedResult.innerHTML = '<div class="note">Onfido SDK token (mount the Web SDK with this to run selfie/liveness):</div><code style="word-break:break-all;">' + token + '</code>';
+  }
+  loadEvents();
+});
+
+async function loadEvents() {
+  const d = await (await fetch('/api/events')).json();
+  const el = document.getElementById('events');
+  el.innerHTML = '';
+  for (const ev of d.events.slice().reverse()) {
+    const div = document.createElement('div');
+    div.className = 'event';
+    const when = new Date(ev.at * 1000).toLocaleTimeString();
+    const status = (ev.result && (ev.result.status || ev.result.flow)) || (ev.webhook ? 'webhook' : '');
+    const fields = ev.result && ev.result.fields ? JSON.stringify(ev.result.fields) : '';
+    div.innerHTML = '<span class="badge">' + (ev.step || 'webhook') + '</span>' +
+      '<b>' + ev.provider + '</b> · ' + when + (status ? ' · ' + status : '') +
+      (fields ? '<div class="note">' + fields + '</div>' : '');
+    el.appendChild(div);
+  }
+}
+loadEvents();
 </script>
 </body>
 </html>
